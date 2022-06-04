@@ -1,0 +1,8 @@
+{
+    "format_version": "1.0.0",
+    "filters": {
+        "functioner": {
+            "url":"github.com/Hatchibombotar/useful-regolith-filters/functioner" 
+        }
+    }
+}
