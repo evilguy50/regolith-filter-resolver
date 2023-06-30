@@ -1,4 +1,4 @@
-import std/[os, json, strutils, strformat]
+import std/[os, osproc, json, strutils, strformat]
 
 let
     resolverJsonPath = fmt"{getAppDir()}/resolver.json"
@@ -8,15 +8,16 @@ var resolverJson = parseFile(resolverJsonPath)
 
 type
     Filter = object
-        name: string
-        author: string
-        url: string
+        name, author, url, lang, description, mainBranch: string
         versions: seq[string]
 
-proc newFilter(name, author, url: string, versions: seq[string]): Filter =
+proc newFilter(name, author, url, lang, description, mainBranch: string, versions: seq[string]): Filter =
     result.name = name
     result.author = author
     result.url = url
+    result.lang = lang
+    result.description = description
+    result.mainBranch = mainBranch
     result.versions = versions
 
 proc findRepo(author, repoName: string): string =
@@ -44,27 +45,53 @@ iterator getFilters(): Filter =
             let repoName = splitPath(repo.path)[1]
             setCurrentDir(root & "/" & repo.path)
             discard execShellCmd("git tag > tags.txt")
+            discard execShellCmd("git branch -r > branch.txt")
+            let main = readFile("branch.txt").split("\n")[0].multiReplace(
+                ("origin/HEAD -> origin/", ""),
+                (" ", "")
+            )
             for filter in walkDir(getCurrentDir()):
                 let filterName = splitPath(filter.path)[1]
                 if (fileExists(filter.path & "/filter.json")):
                     var versions: seq[string] = @["latest"]
                     let tagList = readFile("tags.txt").split("\n")
+                    let filterJson = parseFile(filter.path & "/filter.json")
+                    var description = "Invalid"
+                    let lang = filterJson["filters"][0]["runWith"].to(string)
+                    if filterJson.hasKey("description"):
+                        description = filterJson["description"].to(string)
+                    else:
+                        for fileCheck in walkFiles(filter.path):
+                            if (fileCheck.toLowerAscii().contains("readme")):
+                                description = readFile(fileCheck).split("\n")[0]
                     for tag in tagList:
                         if tag.contains(filterName):
                             let strVersion = tag.replace(filterName & "-", "")
                             versions.add(strVersion)
-                    yield newFilter(filterName, user, findRepo(user, repoName), versions)
+                    yield newFilter(filterName, user, findRepo(user, repoName), lang, description, main, versions)
             setCurrentDir(root)
 
 proc addFilter(f: Filter): Filter =
     result = f
     if not resolverJson["filters"].hasKey(f.name):
-        resolverJson["filters"][f.name] = %*{"url": f.url, "versions": f.versions}
+        resolverJson["filters"][f.name] = %*{
+            "url": f.url,
+            "lang": f.lang,
+            "description": f.description,
+            "main_branch": f.mainBranch,
+            "versions": f.versions
+        }
         echo fmt"Added filter {f.name}"
     elif not resolverJson["filters"][f.name]["url"].to(string).contains(f.author):
         let newFilterName = f.author & "_" & f.name
         if not resolverJson["filters"].hasKey(newFilterName):
-            resolverJson["filters"][newFilterName] = %*{"url": f.url, "versions": f.versions}
+            resolverJson["filters"][newFilterName] = %*{
+                "url": f.url,
+                "lang": f.lang,
+                "description": f.description,
+                "main_branch": f.mainBranch,
+                "versions": f.versions
+            }
             echo fmt"Added filter {newFilterName}"
         result.name = newFilterName
 
@@ -75,6 +102,9 @@ for validFilter in getFilters():
     allFilters.add(addedFilter)
 
 for existFilter in allFilters:
+    resolverJson["filters"][existFilter.name]["lang"] = %*existFilter.lang
+    resolverJson["filters"][existFilter.name]["description"] = %*existFilter.description
+    resolverJson["filters"][existFilter.name]["main_branch"] = %*existFilter.mainBranch
     resolverJson["filters"][existFilter.name]["versions"] = %*existFilter.versions
 
 resolverJsonPath.writeFile(resolverJson.pretty())
